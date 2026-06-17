@@ -1,0 +1,63 @@
+kpi_list:
+  - name: revenue
+    display_name: 营收
+    unit: 元
+    description: 每日总营收金额
+    expected_direction: up
+    aggregation: sum
+    primary: true
+
+  - name: order_count
+    display_name: 订单量
+    unit: 单
+    description: 每日订单总数
+    expected_direction: up
+    aggregation: sum
+    primary: false
+
+  - name: avg_price
+    display_name: 客单价
+    unit: 元/单
+    description: 平均每单金额
+    expected_direction: up
+    aggregation: avg
+    primary: false
+
+analysis:
+  window_size: 7
+  seasonal_period: 7
+  z_threshold: 2.0
+  priority_dimension_combo:
+    - region
+    - product_line
+
+dimensions:
+  - name: region
+    display_name: 区域
+    values:
+      - 华东
+      - 华南
+      - 华北
+      - 西南
+      - 华中
+
+  - name: product_line
+    display_name: 产品线
+    values:
+      - 手机
+      - 电脑
+      - 平板
+      - 穿戴设备
+
+  - name: channel
+    display_name: 渠道
+    values:
+      - 线上直营
+      - 线下门店
+      - 分销商
+      - 运营商
+
+output:
+  report_dir: output
+  timezone_offset: "+08:00"
+  csv_encoding: utf-8-sig

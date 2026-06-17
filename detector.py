@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
+from statsmodels.tsa.seasonal import STL
 from db import get_connection
 
 
 class AnomalyDetector:
-    def __init__(self, window_size=7, z_threshold=2.0, db_path=None):
+    def __init__(self, window_size=7, seasonal_period=7, z_threshold=2.0, db_path=None):
         self.window_size = window_size
+        self.seasonal_period = seasonal_period
         self.z_threshold = z_threshold
         self.db_path = db_path
 
@@ -24,11 +26,29 @@ class AnomalyDetector:
         df = df.sort_values("date").reset_index(drop=True)
         return df
 
-    def compute_rolling_stats(self, series):
-        rolling_mean = series.rolling(window=self.window_size, min_periods=1).mean()
-        rolling_std = series.rolling(window=self.window_size, min_periods=1).std()
-        rolling_std = rolling_std.fillna(0).replace(0, 1e-9)
-        return rolling_mean, rolling_std
+    def stl_decompose(self, series):
+        min_length = max(self.seasonal_period * 2, 14)
+        if len(series) < min_length:
+            rolling_mean = series.rolling(window=self.seasonal_period, min_periods=1).mean()
+            rolling_std = series.rolling(window=self.seasonal_period, min_periods=1).std()
+            trend = rolling_mean
+            seasonal = pd.Series(np.zeros(len(series)), index=series.index)
+            residual = series - trend - seasonal
+            resid_std = rolling_std.fillna(0).replace(0, 1e-9)
+            return trend, seasonal, residual, resid_std
+
+        freq = self.seasonal_period
+        stl = STL(series, period=freq, seasonal=7, trend=None, robust=True)
+        result = stl.fit()
+        trend = pd.Series(result.trend, index=series.index)
+        seasonal = pd.Series(result.seasonal, index=series.index)
+        residual = pd.Series(result.resid, index=series.index)
+        expected = trend + seasonal
+
+        resid_std = residual.rolling(window=self.seasonal_period, min_periods=1).std()
+        resid_std = resid_std.fillna(0).replace(0, 1e-9)
+
+        return expected, seasonal, residual, resid_std
 
     def detect(self, kpi_name="revenue"):
         df = self.load_daily_kpi(kpi_name)
@@ -36,13 +56,21 @@ class AnomalyDetector:
             return df
 
         col = kpi_name
-        rolling_mean, rolling_std = self.compute_rolling_stats(df[col])
+        series = df.set_index("date")[col].asfreq("D")
+        expected, seasonal, residual, resid_std = self.stl_decompose(series)
 
-        df["rolling_mean"] = rolling_mean
-        df["rolling_std"] = rolling_std
-        df["deviation"] = df[col] - df["rolling_mean"]
-        df["deviation_pct"] = (df["deviation"] / df["rolling_mean"].replace(0, 1e-9)) * 100
-        df["z_score"] = df["deviation"] / rolling_std
+        expected = expected.reset_index(drop=True)
+        seasonal = seasonal.reset_index(drop=True)
+        residual = residual.reset_index(drop=True)
+        resid_std = resid_std.reset_index(drop=True)
+
+        df["expected"] = expected
+        df["seasonal"] = seasonal
+        df["residual"] = residual
+        df["resid_std"] = resid_std
+        df["deviation"] = residual
+        df["deviation_pct"] = (df["deviation"] / df["expected"].replace(0, 1e-9)) * 100
+        df["z_score"] = df["deviation"] / df["resid_std"]
         df["is_anomaly"] = df["z_score"].abs() > self.z_threshold
 
         return df
@@ -66,6 +94,12 @@ class AnomalyDetector:
         overall_deviation_pct = (overall_deviation / hist_mean) * 100 if hist_mean != 0 else 0
         overall_z = overall_deviation / hist_std
 
+        curr_resid_mean = current["residual"].mean()
+        curr_resid_std = current["resid_std"].mean()
+        if curr_resid_std == 0:
+            curr_resid_std = 1e-9
+        stl_z = curr_resid_mean / curr_resid_std
+
         summary = {
             "kpi_name": kpi_name,
             "current_window_days": len(current),
@@ -75,7 +109,9 @@ class AnomalyDetector:
             "overall_deviation": round(overall_deviation, 2),
             "overall_deviation_pct": round(overall_deviation_pct, 2),
             "overall_z_score": round(overall_z, 2),
-            "is_anomalous": abs(overall_z) > self.z_threshold,
+            "stl_residual_mean": round(curr_resid_mean, 2),
+            "stl_z_score": round(stl_z, 2),
+            "is_anomalous": abs(stl_z) > self.z_threshold,
             "anomaly_direction": "下降" if overall_deviation < 0 else "上升",
             "date_range": f"{current['date'].min().strftime('%Y-%m-%d')} ~ {current['date'].max().strftime('%Y-%m-%d')}",
         }
