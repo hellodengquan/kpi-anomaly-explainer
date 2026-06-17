@@ -10,6 +10,8 @@ class AnomalyDetector:
         self.seasonal_period = seasonal_period
         self.z_threshold = z_threshold
         self.db_path = db_path
+        self._config = None
+        self._kpi_name = None
 
     @classmethod
     def from_config(cls, kpi_name, config, db_path=None):
@@ -21,12 +23,50 @@ class AnomalyDetector:
         kpi_cfg = next((k for k in kpi_list if k["name"] == kpi_name), {})
         seasonal_period = kpi_cfg.get("seasonal_period", analysis_cfg.get("seasonal_period", 7))
 
-        return cls(
+        detector = cls(
             window_size=window_size,
             seasonal_period=seasonal_period,
             z_threshold=z_threshold,
             db_path=db_path,
         )
+        detector._config = config
+        detector._kpi_name = kpi_name
+        return detector
+
+    def reload_config(self, new_config=None, new_kpi_name=None):
+        if new_config is None:
+            from reporter import load_config
+            new_config = load_config()
+
+        kpi_name = new_kpi_name or self._kpi_name
+
+        analysis_cfg = new_config.get("analysis", {})
+        self.window_size = analysis_cfg.get("window_size", self.window_size)
+        self.z_threshold = analysis_cfg.get("z_threshold", self.z_threshold)
+
+        kpi_list = new_config.get("kpi_list", [])
+        kpi_cfg = next((k for k in kpi_list if k["name"] == kpi_name), {})
+        if kpi_cfg:
+            self.seasonal_period = kpi_cfg.get("seasonal_period", self.seasonal_period)
+
+        self._config = new_config
+        self._kpi_name = kpi_name
+
+        return {
+            "window_size": self.window_size,
+            "seasonal_period": self.seasonal_period,
+            "z_threshold": self.z_threshold,
+            "kpi_name": self._kpi_name,
+        }
+
+    def get_config_snapshot(self):
+        return {
+            "window_size": self.window_size,
+            "seasonal_period": self.seasonal_period,
+            "z_threshold": self.z_threshold,
+            "kpi_name": self._kpi_name,
+            "db_path": self.db_path,
+        }
 
     def load_daily_kpi(self, kpi_name="revenue"):
         conn = get_connection(self.db_path)

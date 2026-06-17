@@ -17,7 +17,7 @@ kpi_list:
     aggregation: sum
     primary: false
     seasonal_period: 7
-    normalization_threshold: 0.25
+    normalization_threshold: 0.3
 
   - name: avg_price
     display_name: 客单价
@@ -32,10 +32,13 @@ kpi_list:
 analysis:
   window_size: 7
   z_threshold: 2.0
+  normalization_threshold: 0.3
   drilldown_layers:
     - [region, product_line, channel]
+    - [region, product_line, channel, member_level]
   priority_combos:
     - [region, product_line]
+    - [region, product_line, member_level]
 
 dimensions:
   - name: region
@@ -63,6 +66,14 @@ dimensions:
       - 分销商
       - 运营商
 
+  - name: member_level
+    display_name: 会员等级
+    values:
+      - 普通
+      - 银卡
+      - 金卡
+      - 黑卡
+
 timezone_map:
   CST: "+08:00"
   JST: "+09:00"
@@ -70,8 +81,32 @@ timezone_map:
   EST: "-05:00"
   UTC: "+00:00"
   CET: "+01:00"
+  IST: "+05:30"
+  KST: "+09:00"
+  AEST: "+10:00"
+  NST: "+12:00"
+  Asia/Shanghai: "+08:00"
+  Asia/Tokyo: "+09:00"
+  America/Los_Angeles: "-08:00"
+  America/New_York: "-05:00"
+  Europe/London: "+00:00"
+  Europe/Paris: "+01:00"
 
 output:
   report_dir: output
-  default_timezone: CST
+  default_timezone: Asia/Shanghai
   csv_encoding: utf-8-sig
+
+recommended_defaults:
+  seasonal_period:
+    weekly: 7
+    biweekly: 14
+    monthly: 30
+  normalization_threshold:
+    strict: 0.15
+    standard: 0.3
+    lenient: 0.5
+  z_threshold:
+    strict: 1.5
+    standard: 2.0
+    lenient: 3.0

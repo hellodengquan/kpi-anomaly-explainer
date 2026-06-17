@@ -8,6 +8,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kpi_data.db"
 REGIONS = ["华东", "华南", "华北", "西南", "华中"]
 PRODUCT_LINES = ["手机", "电脑", "平板", "穿戴设备"]
 CHANNELS = ["线上直营", "线下门店", "分销商", "运营商"]
+MEMBER_LEVELS = ["普通", "银卡", "金卡", "黑卡"]
 
 CREATE_KPI_METRICS_SQL = """
 CREATE TABLE IF NOT EXISTS kpi_metrics (
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS kpi_metrics (
     region TEXT NOT NULL,
     product_line TEXT NOT NULL,
     channel TEXT NOT NULL,
+    member_level TEXT NOT NULL,
     revenue REAL NOT NULL,
     order_count INTEGER NOT NULL,
     avg_price REAL NOT NULL
@@ -83,6 +85,20 @@ def seed_metrics(conn, days=90, anomaly_day_offset=5):
         "运营商": 0.15,
     }
 
+    member_ratios = {
+        "普通": 0.45,
+        "银卡": 0.25,
+        "金卡": 0.20,
+        "黑卡": 0.10,
+    }
+
+    member_price_mult = {
+        "普通": 1.0,
+        "银卡": 0.95,
+        "金卡": 0.88,
+        "黑卡": 0.80,
+    }
+
     random.seed(42)
 
     rows = []
@@ -95,27 +111,36 @@ def seed_metrics(conn, days=90, anomaly_day_offset=5):
         for region in REGIONS:
             for product_line in PRODUCT_LINES:
                 for channel in CHANNELS:
-                    base_rev = base_revenues[region][product_line] * channel_ratios[channel]
-                    weekday = current_date.weekday()
-                    if weekday >= 5:
-                        base_rev *= 0.75
-                    noise = random.gauss(0, base_rev * 0.05)
-                    revenue = base_rev + noise
+                    for member_level in MEMBER_LEVELS:
+                        base_rev = (base_revenues[region][product_line]
+                                    * channel_ratios[channel]
+                                    * member_ratios[member_level])
+                        weekday = current_date.weekday()
+                        if weekday >= 5:
+                            base_rev *= 0.75
+                        noise = random.gauss(0, base_rev * 0.05)
+                        revenue = base_rev + noise
+                        price_mult = member_price_mult[member_level]
 
-                    if is_anomaly_window:
-                        if region == "华东" and product_line == "手机" and channel == "线上直营":
-                            revenue *= random.uniform(0.45, 0.55)
-                        if region == "华南" and product_line == "平板":
-                            revenue *= random.uniform(1.30, 1.45)
+                        if is_anomaly_window:
+                            if region == "华东" and product_line == "手机" and channel == "线上直营":
+                                revenue *= random.uniform(0.45, 0.55)
+                            if region == "华南" and product_line == "平板":
+                                revenue *= random.uniform(1.30, 1.45)
+                            if region == "华北" and product_line == "手机" and channel == "线下门店" and member_level == "金卡":
+                                revenue *= random.uniform(0.50, 0.60)
 
-                    revenue = max(0, revenue)
-                    order_count = max(1, int(revenue / random.uniform(150, 450)))
-                    avg_price = revenue / order_count if order_count > 0 else 0
+                        revenue = max(0, revenue)
+                        order_count = max(1, int(revenue / random.uniform(150 * price_mult, 450 * price_mult)))
+                        avg_price = revenue / order_count if order_count > 0 else 0
 
-                    rows.append((date_str, region, product_line, channel, round(revenue, 2), order_count, round(avg_price, 2)))
+                        rows.append((
+                            date_str, region, product_line, channel, member_level,
+                            round(revenue, 2), order_count, round(avg_price, 2)
+                        ))
 
     cursor.executemany(
-        "INSERT INTO kpi_metrics (date, region, product_line, channel, revenue, order_count, avg_price) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO kpi_metrics (date, region, product_line, channel, member_level, revenue, order_count, avg_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()

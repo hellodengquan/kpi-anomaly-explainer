@@ -1,4 +1,5 @@
 import os
+import re
 import yaml
 import pandas as pd
 from datetime import datetime
@@ -17,7 +18,29 @@ TIMEZONE_MAP_BUILTIN = {
     "KST": "+09:00",
     "AEST": "+10:00",
     "NST": "+12:00",
+    "Asia/Shanghai": "+08:00",
+    "Asia/Beijing": "+08:00",
+    "Asia/Tokyo": "+09:00",
+    "Asia/Seoul": "+09:00",
+    "Asia/Singapore": "+08:00",
+    "Asia/Kolkata": "+05:30",
+    "Asia/Dubai": "+04:00",
+    "Asia/Hong_Kong": "+08:00",
+    "Asia/Taipei": "+08:00",
+    "America/Los_Angeles": "-08:00",
+    "America/New_York": "-05:00",
+    "America/Chicago": "-06:00",
+    "America/Denver": "-07:00",
+    "America/Sao_Paulo": "-03:00",
+    "Europe/London": "+00:00",
+    "Europe/Paris": "+01:00",
+    "Europe/Berlin": "+01:00",
+    "Europe/Moscow": "+03:00",
+    "Australia/Sydney": "+10:00",
+    "Pacific/Auckland": "+12:00",
 }
+
+OFFSET_PATTERN = re.compile(r"^[+-]\d{2}:\d{2}$")
 
 
 def load_config(config_path=None):
@@ -30,9 +53,9 @@ def load_config(config_path=None):
 def resolve_timezone(tz_label, config=None):
     if not tz_label:
         cfg = config or {}
-        tz_label = cfg.get("output", {}).get("default_timezone", "CST")
+        tz_label = cfg.get("output", {}).get("default_timezone", "Asia/Shanghai")
 
-    if tz_label.startswith("+") or tz_label.startswith("-"):
+    if OFFSET_PATTERN.match(tz_label):
         return tz_label
 
     if config:
@@ -43,21 +66,75 @@ def resolve_timezone(tz_label, config=None):
     if tz_label in TIMEZONE_MAP_BUILTIN:
         return TIMEZONE_MAP_BUILTIN[tz_label]
 
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import timezone as dt_timezone
+        tz = ZoneInfo(tz_label)
+        now = datetime.now(tz)
+        offset = now.utcoffset()
+        if offset is not None:
+            total_seconds = int(offset.total_seconds())
+            hours = total_seconds // 3600
+            minutes = abs((total_seconds % 3600) // 60)
+            sign = "+" if hours >= 0 else "-"
+            return f"{sign}{abs(hours):02d}:{minutes:02d}"
+    except Exception:
+        pass
+
     return "+00:00"
 
 
 class ReportGenerator:
     def __init__(self, output_dir=None, config=None, config_path=None, tz_label=None):
-        self.config = config or load_config(config_path)
+        self.config_path = config_path or DEFAULT_CONFIG_PATH
+        self.config = config or load_config(self.config_path)
         self.output_dir = output_dir or os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             self.config.get("output", {}).get("report_dir", "output")
         )
-        self.tz_label = tz_label or self.config.get("output", {}).get("default_timezone", "CST")
+        self.tz_label = tz_label or self.config.get("output", {}).get("default_timezone", "Asia/Shanghai")
         self.timezone_offset = resolve_timezone(self.tz_label, self.config)
         self.csv_encoding = self.config.get("output", {}).get("csv_encoding", "utf-8-sig")
         self.kpi_meta = {k["name"]: k for k in self.config.get("kpi_list", [])}
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def reload_config(self, new_config=None, new_tz_label=None):
+        if new_config is None:
+            new_config = load_config(self.config_path)
+        self.config = new_config
+        if new_tz_label:
+            self.tz_label = new_tz_label
+        else:
+            self.tz_label = new_config.get("output", {}).get("default_timezone", self.tz_label)
+        self.timezone_offset = resolve_timezone(self.tz_label, new_config)
+        self.csv_encoding = new_config.get("output", {}).get("csv_encoding", self.csv_encoding)
+        self.kpi_meta = {k["name"]: k for k in new_config.get("kpi_list", [])}
+        self.output_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            new_config.get("output", {}).get("report_dir", self.output_dir)
+        )
+        os.makedirs(self.output_dir, exist_ok=True)
+        return {
+            "tz_label": self.tz_label,
+            "timezone_offset": self.timezone_offset,
+            "csv_encoding": self.csv_encoding,
+            "kpi_count": len(self.kpi_meta),
+            "output_dir": self.output_dir,
+        }
+
+    def get_config_snapshot(self):
+        return {
+            "tz_label": self.tz_label,
+            "timezone_offset": self.timezone_offset,
+            "csv_encoding": self.csv_encoding,
+            "kpi_count": len(self.kpi_meta),
+            "output_dir": self.output_dir,
+            "config_path": self.config_path,
+        }
+
+    @staticmethod
+    def resolve_tz(tz_label, config=None):
+        return resolve_timezone(tz_label, config)
 
     def _kpi_display(self, kpi_name):
         meta = self.kpi_meta.get(kpi_name, {})
@@ -237,22 +314,28 @@ class ReportGenerator:
 
         if three_dim_df is not None and not three_dim_df.empty:
             sub_num = section_offset + 5
-            layer_names = set()
+            lines.append(f"## {sub_num}. 多层深度下钻")
+            lines.append("")
+            layer_name_map = {}
             for _, r in three_dim_df.iterrows():
-                ld = r.get("layer_dims", [])
-                layer_names.add("+".join(ld))
-            layer_desc = "、".join(sorted(layer_names)) if layer_names else "产品+地域+渠道"
-            lines.append(f"## {sub_num}. 三维度深度下钻（{layer_desc}）")
-            lines.append("")
-            lines.append("| 维度组合 | 父组合 | 偏差 | 偏差% | 父内贡献% | Z-Score | 方向 |")
-            lines.append("|------|------|------|------|------|------|------|")
-            for _, row in three_dim_df.head(10).iterrows():
-                lines.append(
-                    f"| {row['dimension_combo']} | {row['parent_combo']} | "
-                    f"{row['deviation']:,.2f} | {row['deviation_pct']:.2f}% | "
-                    f"{row['contribution_in_parent']:.2f}% | {row['z_score']:.2f} | {row['direction']} |"
-                )
-            lines.append("")
+                ld = tuple(r.get("layer_dims", []))
+                if ld not in layer_name_map:
+                    layer_name_map[ld] = " + ".join(ld)
+            for ld, name in layer_name_map.items():
+                layer_rows = three_dim_df[three_dim_df["layer_dims"].apply(lambda x: tuple(x) == ld)]
+                if layer_rows.empty:
+                    continue
+                lines.append(f"### {sub_num}.1 {name}（{len(ld)}层）")
+                lines.append("")
+                lines.append("| 维度组合 | 父组合 | 偏差 | 偏差% | 父内贡献% | Z-Score | 方向 |")
+                lines.append("|------|------|------|------|------|------|------|")
+                for _, row in layer_rows.head(10).iterrows():
+                    lines.append(
+                        f"| {row['dimension_combo']} | {row['parent_combo']} | "
+                        f"{row['deviation']:,.2f} | {row['deviation_pct']:.2f}% | "
+                        f"{row['contribution_in_parent']:.2f}% | {row['z_score']:.2f} | {row['direction']} |"
+                    )
+                lines.append("")
 
         sub_num_offset = 5 if (three_dim_df is not None and not three_dim_df.empty) else 4
         sub_num = section_offset + sub_num_offset + 1
@@ -295,7 +378,7 @@ class ReportGenerator:
 
         three_causes = root_causes.get("three_dimension_causes", [])
         if three_causes:
-            lines.append(f"### {sub_num}.3 三维度根因")
+            lines.append(f"### {sub_num}.3 多层根因")
             lines.append("")
             lines.append("| 排名 | 维度组合 | 父组合 | 偏差 | 父内贡献% | Z-Score | 方向 | 置信度 |")
             lines.append("|------|------|------|------|------|------|------|------|")
@@ -326,7 +409,7 @@ class ReportGenerator:
                     lines.append(f"- {c['dimension_combo']}: {c['direction']}偏差，贡献度 {abs(c['contribution_pct']):.2f}%，置信度 {c['confidence']:.4f}")
                 lines.append("")
             if three_causes:
-                lines.append("**三维度嫌疑:**")
+                lines.append("**多层维度嫌疑:**")
                 lines.append("")
                 for c in three_causes[:3]:
                     lines.append(f"- {c['dimension_combo']} (父: {c['parent_combo']}): {c['direction']}偏差，父内贡献 {abs(c['contribution_in_parent_pct']):.2f}%，置信度 {c['confidence']:.4f}")
@@ -393,13 +476,13 @@ class ReportGenerator:
         three_causes = root_causes.get("three_dimension_causes", [])
         if three_causes:
             tc_df = pd.DataFrame(three_causes)
-            tc_path = os.path.join(self.output_dir, f"{safe_kpi}_root_causes_three.csv")
+            tc_path = os.path.join(self.output_dir, f"{safe_kpi}_root_causes_multi.csv")
             tc_df.to_csv(tc_path, index=False, encoding=self.csv_encoding)
-            csv_paths["root_causes_three"] = tc_path
+            csv_paths["root_causes_multi"] = tc_path
 
         if three_dim_df is not None and not three_dim_df.empty:
-            td_path = os.path.join(self.output_dir, f"{safe_kpi}_three_dimension_drilldown.csv")
+            td_path = os.path.join(self.output_dir, f"{safe_kpi}_multi_dimension_drilldown.csv")
             three_dim_df.to_csv(td_path, index=False, encoding=self.csv_encoding)
-            csv_paths["three_dim_drilldown"] = td_path
+            csv_paths["multi_dim_drilldown"] = td_path
 
         return csv_paths

@@ -2,10 +2,19 @@ import pandas as pd
 import numpy as np
 
 
+RECOMMENDED_PROFILES = {
+    "strict": {"z_threshold": 1.5, "normalization_threshold": 0.15},
+    "standard": {"z_threshold": 2.0, "normalization_threshold": 0.30},
+    "lenient": {"z_threshold": 3.0, "normalization_threshold": 0.50},
+}
+
+
 class RootCauseRanker:
-    def __init__(self, z_threshold=2.0, normalization_threshold=0.3):
+    def __init__(self, z_threshold=2.0, normalization_threshold=0.30):
         self.z_threshold = z_threshold
         self.normalization_threshold = normalization_threshold
+        self._config = None
+        self._kpi_name = None
 
     @classmethod
     def from_config(cls, kpi_name, config):
@@ -15,9 +24,62 @@ class RootCauseRanker:
 
         kpi_list = config.get("kpi_list", [])
         kpi_cfg = next((k for k in kpi_list if k["name"] == kpi_name), {})
-        normalization_threshold = kpi_cfg.get("normalization_threshold", default_norm)
 
-        return cls(z_threshold=z_threshold, normalization_threshold=normalization_threshold)
+        profile = kpi_cfg.get("sensitivity_profile")
+        if profile and profile in RECOMMENDED_PROFILES:
+            profile_cfg = RECOMMENDED_PROFILES[profile]
+            z_threshold = kpi_cfg.get("z_threshold", profile_cfg["z_threshold"])
+            normalization_threshold = kpi_cfg.get("normalization_threshold", profile_cfg["normalization_threshold"])
+        else:
+            normalization_threshold = kpi_cfg.get("normalization_threshold", default_norm)
+
+        ranker = cls(z_threshold=z_threshold, normalization_threshold=normalization_threshold)
+        ranker._config = config
+        ranker._kpi_name = kpi_name
+        return ranker
+
+    def reload_config(self, new_config=None, new_kpi_name=None):
+        if new_config is None:
+            from reporter import load_config
+            new_config = load_config()
+
+        kpi_name = new_kpi_name or self._kpi_name
+
+        analysis_cfg = new_config.get("analysis", {})
+        self.z_threshold = analysis_cfg.get("z_threshold", self.z_threshold)
+        default_norm = analysis_cfg.get("normalization_threshold", self.normalization_threshold)
+
+        kpi_list = new_config.get("kpi_list", [])
+        kpi_cfg = next((k for k in kpi_list if k["name"] == kpi_name), {})
+
+        profile = kpi_cfg.get("sensitivity_profile")
+        if profile and profile in RECOMMENDED_PROFILES:
+            profile_cfg = RECOMMENDED_PROFILES[profile]
+            self.z_threshold = kpi_cfg.get("z_threshold", profile_cfg["z_threshold"])
+            self.normalization_threshold = kpi_cfg.get("normalization_threshold", profile_cfg["normalization_threshold"])
+        else:
+            self.normalization_threshold = kpi_cfg.get("normalization_threshold", default_norm)
+
+        self._config = new_config
+        self._kpi_name = kpi_name
+
+        return {
+            "z_threshold": self.z_threshold,
+            "normalization_threshold": self.normalization_threshold,
+            "kpi_name": self._kpi_name,
+        }
+
+    def get_config_snapshot(self):
+        return {
+            "z_threshold": self.z_threshold,
+            "normalization_threshold": self.normalization_threshold,
+            "kpi_name": self._kpi_name,
+            "available_profiles": list(RECOMMENDED_PROFILES.keys()),
+        }
+
+    @staticmethod
+    def get_recommended_profiles():
+        return RECOMMENDED_PROFILES
 
     def _direction_normalize(self, contribution, overall_deviation, deviation):
         if overall_deviation > 0:
