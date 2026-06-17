@@ -37,6 +37,18 @@ class KpiExplainerService:
         self.run_count = 0
         self.last_run_at = None
 
+        sec_cfg = self.config.get("security", {})
+        self.admin_token = sec_cfg.get("admin_token", "")
+        self.token_header = sec_cfg.get("token_header", "X-Admin-Token")
+        self.allow_get_admin = sec_cfg.get("allow_get_admin", False)
+
+    def check_admin_token(self, token_from_header):
+        if not self.admin_token:
+            return True
+        if not token_from_header:
+            return False
+        return token_from_header == self.admin_token
+
     @classmethod
     def get_instance(cls, db_path=None, tz_label=None):
         if cls._instance is None:
@@ -101,6 +113,11 @@ class KpiExplainerService:
 
             self.last_reload_at = datetime.now().isoformat()
 
+            sec_cfg = new_config.get("security", {})
+            self.admin_token = sec_cfg.get("admin_token", "")
+            self.token_header = sec_cfg.get("token_header", "X-Admin-Token")
+            self.allow_get_admin = sec_cfg.get("allow_get_admin", False)
+
             return {
                 "reloaded_at": self.last_reload_at,
                 "tz_label": self.tz_label,
@@ -110,6 +127,11 @@ class KpiExplainerService:
                 "analyzers": analyzer_snapshots,
                 "rankers": ranker_snapshots,
                 "kpi_count": len(new_config.get("kpi_list", [])),
+                "security": {
+                    "token_configured": bool(self.admin_token),
+                    "token_header": self.token_header,
+                    "allow_get_admin": self.allow_get_admin,
+                },
             }
 
     def status(self):
@@ -124,11 +146,19 @@ class KpiExplainerService:
             "loaded_rankers": list(self.rankers.keys()),
             "reporter": self.reporter.get_config_snapshot(),
             "recommended_profiles": RootCauseRanker.get_recommended_profiles(),
+            "kpi_type_profiles": RootCauseRanker.get_kpi_type_profiles(),
+            "security": {
+                "token_configured": bool(self.admin_token),
+                "token_header": self.token_header,
+                "allow_get_admin": self.allow_get_admin,
+            },
             "kpi_list": [
                 {
                     "name": k["name"],
                     "display_name": k.get("display_name", k["name"]),
                     "primary": k.get("primary", False),
+                    "kpi_type": k.get("kpi_type"),
+                    "sensitivity_profile": k.get("sensitivity_profile"),
                     "seasonal_period": k.get("seasonal_period"),
                     "normalization_threshold": k.get("normalization_threshold"),
                 }
@@ -298,18 +328,27 @@ class AdminHandler(BaseHTTPRequestHandler):
 
         if path == "" or path == "/":
             self._send_json({"service": "kpi-anomaly-explainer", "status": "ok", "endpoints": ["/health", "/status", "/admin/reload", "/run"]})
-        elif path == "/health":
+            return
+        if path == "/health":
             self._send_json({"status": "healthy", "tz": service.tz_label, "offset": service.timezone_offset})
-        elif path == "/status":
+            return
+        if path == "/status":
             self._send_json(service.status())
-        elif path == "/admin/reload":
+            return
+        if path == "/admin/reload":
+            if not service.allow_get_admin:
+                token = self.headers.get(service.token_header)
+                if not service.check_admin_token(token):
+                    self._send_json({"error": "unauthorized", "detail": f"需要 {service.token_header} 请求头", "method": "GET admin/reload disabled, use POST"}, status=401)
+                    return
             info = service.reload_all()
             self._send_json({"status": "ok", "info": info})
-        elif path == "/run":
+            return
+        if path == "/run":
             result = service.run()
             self._send_json({"status": "ok", "result": result})
-        else:
-            self._send_json({"error": "not_found", "path": path}, status=404)
+            return
+        self._send_json({"error": "not_found", "path": path}, status=404)
 
     def do_POST(self):
         service = KpiExplainerService.get_instance()
@@ -325,29 +364,43 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return
 
         if path == "/admin/reload":
+            token = self.headers.get(service.token_header)
+            if not service.check_admin_token(token):
+                self._send_json({"error": "unauthorized", "detail": f"需要 {service.token_header} 请求头"}, status=401)
+                return
             new_tz = body.get("tz")
             info = service.reload_all(new_tz_label=new_tz)
             self._send_json({"status": "ok", "info": info})
-        elif path == "/run":
+            return
+        if path == "/run":
+            token = self.headers.get(service.token_header)
+            if not service.check_admin_token(token):
+                self._send_json({"error": "unauthorized", "detail": f"需要 {service.token_header} 请求头"}, status=401)
+                return
             kpi_name = body.get("kpi")
             multi = body.get("multi", True)
             result = service.run(kpi_name=kpi_name, generate_multi_report=multi)
             self._send_json({"status": "ok", "result": result})
-        else:
-            self._send_json({"error": "not_found", "path": path}, status=404)
+            return
+        self._send_json({"error": "not_found", "path": path}, status=404)
 
 
 def serve(host="0.0.0.0", port=8765, db_path=None, tz_label=None):
     setup(db_path)
-    KpiExplainerService.get_instance(db_path=db_path, tz_label=tz_label)
+    svc = KpiExplainerService.get_instance(db_path=db_path, tz_label=tz_label)
     server = HTTPServer((host, port), AdminHandler)
     print(f"[kpi-explainer] 服务启动: http://{host}:{port}")
-    print(f"[kpi-explainer] 时区: {KpiExplainerService.get_instance().tz_label} ({KpiExplainerService.get_instance().timezone_offset})")
+    print(f"[kpi-explainer] 时区: {svc.tz_label} ({svc.timezone_offset})")
+    print(f"[kpi-explainer] 安全: token_configured={bool(svc.admin_token)}, header={svc.token_header}, allow_get_admin={svc.allow_get_admin}")
     print(f"[kpi-explainer] 接口:")
     print(f"  GET  /health           健康检查")
     print(f"  GET  /status           当前配置状态")
-    print(f"  GET/POST /admin/reload 热重载配置 (POST body: {{\"tz\": \"Asia/Tokyo\"}})")
-    print(f"  GET/POST /run          执行一次分析 (POST body: {{\"kpi\": \"revenue\", \"multi\": false}})")
+    print(f"  POST /admin/reload     热重载配置 (需 {svc.token_header})  body: {{\"tz\": \"Asia/Tokyo\"}}")
+    print(f"  POST /run              执行一次分析 (需 {svc.token_header})  body: {{\"kpi\": \"revenue\", \"multi\": false}}")
+    if svc.allow_get_admin:
+        print(f"  GET  /admin/reload     热重载配置（已开启GET调用）")
+    else:
+        print(f"  GET  /admin/reload     已禁用（allow_get_admin=false）")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

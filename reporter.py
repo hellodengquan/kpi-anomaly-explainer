@@ -38,6 +38,31 @@ TIMEZONE_MAP_BUILTIN = {
     "Europe/Moscow": "+03:00",
     "Australia/Sydney": "+10:00",
     "Pacific/Auckland": "+12:00",
+    "America/Indiana/Marengo": "-05:00",
+    "America/Indiana/Knox": "-06:00",
+    "America/Indiana/Petersburg": "-05:00",
+    "America/Indiana/Vevay": "-05:00",
+    "America/Indiana/Vincennes": "-05:00",
+    "America/Indiana/Winamac": "-05:00",
+    "America/Kentucky/Louisville": "-05:00",
+    "America/Kentucky/Monticello": "-05:00",
+    "America/North_Dakota/Beulah": "-06:00",
+    "America/North_Dakota/Center": "-06:00",
+    "America/North_Dakota/New_Salem": "-06:00",
+}
+
+EDGE_DST_TIMEZONES = {
+    "America/Indiana/Marengo",
+    "America/Indiana/Knox",
+    "America/Indiana/Petersburg",
+    "America/Indiana/Vevay",
+    "America/Indiana/Vincennes",
+    "America/Indiana/Winamac",
+    "America/Kentucky/Louisville",
+    "America/Kentucky/Monticello",
+    "America/North_Dakota/Beulah",
+    "America/North_Dakota/Center",
+    "America/North_Dakota/New_Salem",
 }
 
 OFFSET_PATTERN = re.compile(r"^[+-]\d{2}:\d{2}$")

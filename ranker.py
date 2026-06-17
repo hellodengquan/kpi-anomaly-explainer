@@ -8,6 +8,34 @@ RECOMMENDED_PROFILES = {
     "lenient": {"z_threshold": 3.0, "normalization_threshold": 0.50},
 }
 
+KPI_TYPE_PROFILES = {
+    "monetary": {
+        "description": "金额类指标（营收、客单价、GMV）",
+        "z_threshold": 2.0,
+        "normalization_threshold": 0.30,
+    },
+    "order_volume": {
+        "description": "订单量/流量类指标（订单量、UV、PV）",
+        "z_threshold": 2.0,
+        "normalization_threshold": 0.25,
+    },
+    "click_rate": {
+        "description": "点击率/转化率类指标（CTR、CVR）",
+        "z_threshold": 1.8,
+        "normalization_threshold": 0.20,
+    },
+    "retention": {
+        "description": "留存/活跃类指标（DAU、次日留存）",
+        "z_threshold": 2.0,
+        "normalization_threshold": 0.35,
+    },
+    "error_rate": {
+        "description": "错误率/流失率类指标（支付失败率、流失率）",
+        "z_threshold": 1.5,
+        "normalization_threshold": 0.15,
+    },
+}
+
 
 class RootCauseRanker:
     def __init__(self, z_threshold=2.0, normalization_threshold=0.30):
@@ -15,27 +43,46 @@ class RootCauseRanker:
         self.normalization_threshold = normalization_threshold
         self._config = None
         self._kpi_name = None
+        self._kpi_type = None
+        self._sensitivity_profile = None
 
     @classmethod
     def from_config(cls, kpi_name, config):
         analysis_cfg = config.get("analysis", {})
-        z_threshold = analysis_cfg.get("z_threshold", 2.0)
+        default_z = analysis_cfg.get("z_threshold", 2.0)
         default_norm = analysis_cfg.get("normalization_threshold", 0.3)
 
         kpi_list = config.get("kpi_list", [])
         kpi_cfg = next((k for k in kpi_list if k["name"] == kpi_name), {})
 
+        z_threshold = default_z
+        normalization_threshold = default_norm
+        kpi_type = kpi_cfg.get("kpi_type")
         profile = kpi_cfg.get("sensitivity_profile")
+
+        type_profiles_from_config = config.get("kpi_type_profiles", {})
+        merged_type_profiles = {**KPI_TYPE_PROFILES, **type_profiles_from_config}
+
+        if kpi_type and kpi_type in merged_type_profiles:
+            tp = merged_type_profiles[kpi_type]
+            z_threshold = tp["z_threshold"]
+            normalization_threshold = tp["normalization_threshold"]
+
         if profile and profile in RECOMMENDED_PROFILES:
             profile_cfg = RECOMMENDED_PROFILES[profile]
-            z_threshold = kpi_cfg.get("z_threshold", profile_cfg["z_threshold"])
-            normalization_threshold = kpi_cfg.get("normalization_threshold", profile_cfg["normalization_threshold"])
-        else:
-            normalization_threshold = kpi_cfg.get("normalization_threshold", default_norm)
+            z_threshold = profile_cfg["z_threshold"]
+            normalization_threshold = profile_cfg["normalization_threshold"]
+
+        if "z_threshold" in kpi_cfg:
+            z_threshold = kpi_cfg["z_threshold"]
+        if "normalization_threshold" in kpi_cfg:
+            normalization_threshold = kpi_cfg["normalization_threshold"]
 
         ranker = cls(z_threshold=z_threshold, normalization_threshold=normalization_threshold)
         ranker._config = config
         ranker._kpi_name = kpi_name
+        ranker._kpi_type = kpi_type
+        ranker._sensitivity_profile = profile
         return ranker
 
     def reload_config(self, new_config=None, new_kpi_name=None):
@@ -46,27 +93,48 @@ class RootCauseRanker:
         kpi_name = new_kpi_name or self._kpi_name
 
         analysis_cfg = new_config.get("analysis", {})
-        self.z_threshold = analysis_cfg.get("z_threshold", self.z_threshold)
+        default_z = analysis_cfg.get("z_threshold", self.z_threshold)
         default_norm = analysis_cfg.get("normalization_threshold", self.normalization_threshold)
 
         kpi_list = new_config.get("kpi_list", [])
         kpi_cfg = next((k for k in kpi_list if k["name"] == kpi_name), {})
 
-        profile = kpi_cfg.get("sensitivity_profile")
+        z_threshold = default_z
+        normalization_threshold = default_norm
+        kpi_type = kpi_cfg.get("kpi_type", self._kpi_type)
+        profile = kpi_cfg.get("sensitivity_profile", self._sensitivity_profile)
+
+        type_profiles_from_config = new_config.get("kpi_type_profiles", {})
+        merged_type_profiles = {**KPI_TYPE_PROFILES, **type_profiles_from_config}
+
+        if kpi_type and kpi_type in merged_type_profiles:
+            tp = merged_type_profiles[kpi_type]
+            z_threshold = tp["z_threshold"]
+            normalization_threshold = tp["normalization_threshold"]
+
         if profile and profile in RECOMMENDED_PROFILES:
             profile_cfg = RECOMMENDED_PROFILES[profile]
-            self.z_threshold = kpi_cfg.get("z_threshold", profile_cfg["z_threshold"])
-            self.normalization_threshold = kpi_cfg.get("normalization_threshold", profile_cfg["normalization_threshold"])
-        else:
-            self.normalization_threshold = kpi_cfg.get("normalization_threshold", default_norm)
+            z_threshold = profile_cfg["z_threshold"]
+            normalization_threshold = profile_cfg["normalization_threshold"]
 
+        if "z_threshold" in kpi_cfg:
+            z_threshold = kpi_cfg["z_threshold"]
+        if "normalization_threshold" in kpi_cfg:
+            normalization_threshold = kpi_cfg["normalization_threshold"]
+
+        self.z_threshold = z_threshold
+        self.normalization_threshold = normalization_threshold
         self._config = new_config
         self._kpi_name = kpi_name
+        self._kpi_type = kpi_type
+        self._sensitivity_profile = profile
 
         return {
             "z_threshold": self.z_threshold,
             "normalization_threshold": self.normalization_threshold,
             "kpi_name": self._kpi_name,
+            "kpi_type": self._kpi_type,
+            "sensitivity_profile": self._sensitivity_profile,
         }
 
     def get_config_snapshot(self):
@@ -74,12 +142,19 @@ class RootCauseRanker:
             "z_threshold": self.z_threshold,
             "normalization_threshold": self.normalization_threshold,
             "kpi_name": self._kpi_name,
+            "kpi_type": self._kpi_type,
+            "sensitivity_profile": self._sensitivity_profile,
             "available_profiles": list(RECOMMENDED_PROFILES.keys()),
+            "available_kpi_types": list(KPI_TYPE_PROFILES.keys()),
         }
 
     @staticmethod
     def get_recommended_profiles():
         return RECOMMENDED_PROFILES
+
+    @staticmethod
+    def get_kpi_type_profiles():
+        return KPI_TYPE_PROFILES
 
     def _direction_normalize(self, contribution, overall_deviation, deviation):
         if overall_deviation > 0:

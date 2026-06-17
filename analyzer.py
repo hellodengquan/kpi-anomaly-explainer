@@ -13,13 +13,15 @@ class DimensionAnalyzer:
 
     def _apply_config(self):
         dim_cfg = self.config.get("dimensions", [])
-        self.dimensions = [d["name"] for d in dim_cfg] if dim_cfg else ["region", "product_line", "channel", "member_level"]
+        self.dimensions = [d["name"] for d in dim_cfg] if dim_cfg else ["region", "product_line", "channel", "member_level", "is_weekend"]
 
         drilldown_cfg = self.config.get("analysis", {}).get("drilldown_layers", [])
         self.drilldown_layers = drilldown_cfg if drilldown_cfg else [self.dimensions]
 
         priority_cfg = self.config.get("analysis", {}).get("priority_combos", [])
         self.priority_combos = [tuple(pc) for pc in priority_cfg] if priority_cfg else []
+
+        self.max_combo_cardinality = self.config.get("analysis", {}).get("max_combo_cardinality", 200)
 
     def reload_config(self, new_config=None):
         if new_config is None:
@@ -32,6 +34,7 @@ class DimensionAnalyzer:
             "drilldown_layers": self.drilldown_layers,
             "priority_combos": self.priority_combos,
             "window_size": self.window_size,
+            "max_combo_cardinality": self.max_combo_cardinality,
         }
 
     def get_config_snapshot(self):
@@ -40,6 +43,7 @@ class DimensionAnalyzer:
             "drilldown_layers": self.drilldown_layers,
             "priority_combos": self.priority_combos,
             "window_size": self.window_size,
+            "max_combo_cardinality": self.max_combo_cardinality,
         }
 
     def load_data(self):
@@ -180,6 +184,13 @@ class DimensionAnalyzer:
             results.append(row_dict)
         return pd.DataFrame(results)
 
+    def _cardinality_check(self, current, layer_dims):
+        valid = [d for d in layer_dims if d in current.columns]
+        if not valid:
+            return True, 0
+        unique_combos = current[valid].drop_duplicates().shape[0]
+        return unique_combos > self.max_combo_cardinality, unique_combos
+
     def _analyze_drilldown_layer(self, current, historical, kpi_name, layer_dims, parent_filter_top_n=3,
                                   parent_total_dev=None):
         if len(layer_dims) < 3:
@@ -187,7 +198,17 @@ class DimensionAnalyzer:
         if any(d not in current.columns for d in layer_dims):
             return pd.DataFrame()
 
+        too_large, cardinality = self._cardinality_check(current, layer_dims)
+        if too_large:
+            print(f"  [WARN] 下钻层 {layer_dims} 组合基数 {cardinality} 超过阈值 {self.max_combo_cardinality}，跳过以防组合爆炸")
+            return pd.DataFrame()
+
         parent_keys = list(layer_dims[:-1])
+
+        parent_too_large, parent_card = self._cardinality_check(current, parent_keys)
+        if parent_too_large:
+            print(f"  [WARN] 父层 {parent_keys} 组合基数 {parent_card} 超过阈值，跳过")
+            return pd.DataFrame()
 
         parent_df, _ = self._compute_metrics(current, historical, kpi_name, parent_keys, parent_total_dev)
         top_parents = parent_df.head(parent_filter_top_n)
@@ -218,6 +239,7 @@ class DimensionAnalyzer:
                     "layer_dims": list(layer_dims),
                     "n_dims": len(layer_dims),
                     "parent_combo": parent_label,
+                    "layer_cardinality": cardinality,
                     "curr_sum": round(row["curr_sum"], 2),
                     "hist_sum": round(row["hist_sum"], 2),
                     "deviation": round(row["deviation"], 2),

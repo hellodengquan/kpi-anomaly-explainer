@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS kpi_metrics (
     product_line TEXT NOT NULL,
     channel TEXT NOT NULL,
     member_level TEXT NOT NULL,
+    is_weekend TEXT NOT NULL,
     revenue REAL NOT NULL,
     order_count INTEGER NOT NULL,
     avg_price REAL NOT NULL
@@ -99,12 +100,21 @@ def seed_metrics(conn, days=90, anomaly_day_offset=5):
         "黑卡": 0.80,
     }
 
+    weekend_ratios = {
+        "线上直营": 1.10,
+        "线下门店": 1.35,
+        "分销商": 0.90,
+        "运营商": 0.95,
+    }
+
     random.seed(42)
 
     rows = []
     for day_idx in range(days):
         current_date = base_date + datetime.timedelta(days=day_idx)
         date_str = current_date.isoformat()
+        weekday = current_date.weekday()
+        is_weekend_label = "周末" if weekday >= 5 else "工作日"
 
         is_anomaly_window = day_idx >= (days - anomaly_day_offset)
 
@@ -115,20 +125,26 @@ def seed_metrics(conn, days=90, anomaly_day_offset=5):
                         base_rev = (base_revenues[region][product_line]
                                     * channel_ratios[channel]
                                     * member_ratios[member_level])
-                        weekday = current_date.weekday()
-                        if weekday >= 5:
-                            base_rev *= 0.75
+
+                        if is_weekend_label == "周末":
+                            base_rev *= weekend_ratios.get(channel, 1.0)
+                        else:
+                            base_rev *= 1.0
+
                         noise = random.gauss(0, base_rev * 0.05)
                         revenue = base_rev + noise
                         price_mult = member_price_mult[member_level]
 
                         if is_anomaly_window:
-                            if region == "华东" and product_line == "手机" and channel == "线上直营":
+                            if (region == "华东" and product_line == "手机"
+                                    and channel == "线上直营"):
                                 revenue *= random.uniform(0.45, 0.55)
-                            if region == "华南" and product_line == "平板":
+                            if (region == "华南" and product_line == "平板"):
                                 revenue *= random.uniform(1.30, 1.45)
-                            if region == "华北" and product_line == "手机" and channel == "线下门店" and member_level == "金卡":
-                                revenue *= random.uniform(0.50, 0.60)
+                            if (region == "华北" and product_line == "手机"
+                                    and channel == "线下门店" and member_level == "金卡"
+                                    and is_weekend_label == "周末"):
+                                revenue *= random.uniform(0.40, 0.55)
 
                         revenue = max(0, revenue)
                         order_count = max(1, int(revenue / random.uniform(150 * price_mult, 450 * price_mult)))
@@ -136,11 +152,12 @@ def seed_metrics(conn, days=90, anomaly_day_offset=5):
 
                         rows.append((
                             date_str, region, product_line, channel, member_level,
+                            is_weekend_label,
                             round(revenue, 2), order_count, round(avg_price, 2)
                         ))
 
     cursor.executemany(
-        "INSERT INTO kpi_metrics (date, region, product_line, channel, member_level, revenue, order_count, avg_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO kpi_metrics (date, region, product_line, channel, member_level, is_weekend, revenue, order_count, avg_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()

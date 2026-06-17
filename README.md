@@ -20,8 +20,12 @@ python main.py --tz +05:30            # 直接传 UTC offset
 ```bash
 python main.py --serve --port 8765 --tz Asia/Shanghai
 # curl http://localhost:8765/health
-# curl -X POST http://localhost:8765/admin/reload -H 'Content-Type: application/json' -d '{"tz":"Asia/Tokyo"}'
-# curl http://localhost:8765/run
+# curl -X POST http://localhost:8765/admin/reload \
+#      -H 'X-Admin-Token: kpi-explainer-admin-2026' \
+#      -H 'Content-Type: application/json' \
+#      -d '{"tz":"Asia/Tokyo"}'
+# curl -X POST http://localhost:8765/run \
+#      -H 'X-Admin-Token: kpi-explainer-admin-2026'
 ```
 
 ## 命令行参数
@@ -38,15 +42,19 @@ python main.py --serve --port 8765 --tz Asia/Shanghai
 
 ## HTTP 接口
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/` | 服务概览与端点列表 |
-| GET | `/health` | 健康检查，返回 `{"status":"healthy", "tz":"Asia/Shanghai", "offset":"+08:00"}` |
-| GET | `/status` | 完整状态：KPI 列表、已加载模块、配置快照、推荐参数档 |
-| GET/POST | `/admin/reload` | 热重载 kpi_config.yaml（无需重启）。POST body 可选 `{"tz":"Asia/Tokyo"}` 切换时区 |
-| GET/POST | `/run` | 执行一次分析。POST body 可选 `{"kpi":"revenue", "multi":false}` |
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/` | ❌ | 服务概览与端点列表 |
+| GET | `/health` | ❌ | 健康检查，返回 `{"status":"healthy", "tz":"Asia/Shanghai", "offset":"+08:00"}` |
+| GET | `/status` | ❌ | 完整状态：KPI 列表、已加载模块、配置快照、推荐参数档、KPI 类型档位、安全配置 |
+| GET | `/admin/reload` | ⚠️ 默认禁用 | 热重载（需 `security.allow_get_admin: true` + Token）|
+| POST | `/admin/reload` | ✅ 需要 Token | 热重载 kpi_config.yaml（无需重启）。body: `{"tz":"Asia/Tokyo"}`（可选）|
+| GET | `/run` | ❌ | 执行一次分析（GET 无鉴权，适合内部测试）|
+| POST | `/run` | ✅ 需要 Token | 执行一次分析。body: `{"kpi":"revenue", "multi":false}` |
 
-`/admin/reload` 热推后，已缓存的 detector / analyzer / ranker / reporter 会全部刷新配置，包括每个 KPI 的 seasonal_period、normalization_threshold、drilldown_layers 等。
+鉴权通过 `X-Admin-Token` 请求头（可在 `security.token_header` 自定义）传递。`/admin/reload` 默认禁用 GET 调用，必须用 POST 且带 Token，防 CSRF/误触。
+
+`/admin/reload` 热推后，已缓存的 detector / analyzer / ranker / reporter 会全部刷新配置，包括每个 KPI 的 seasonal_period、normalization_threshold、drilldown_layers、security 配置本身。
 
 ## 时区支持 (--tz)
 
@@ -55,10 +63,28 @@ python main.py --serve --port 8765 --tz Asia/Shanghai
 | 格式 | 示例 | 说明 |
 |------|------|------|
 | **缩写** | `CST`, `JST`, `PST`, `UTC` | 内置 10+ 常见缩写，可在 `timezone_map` 自定义覆盖 |
-| **IANA** | `Asia/Shanghai`, `America/New_York`, `Europe/London` | 标准时区名，Python 3.9+ 通过 `zoneinfo` 解析 |
+| **IANA** | `Asia/Shanghai`, `America/New_York`, `Europe/London` | 标准时区名，Python 3.9+ 通过 `zoneinfo` 实时解析 |
 | **UTC offset** | `+08:00`, `-05:00`, `+05:30` | 直接使用 |
 
 内置 IANA 映射：`Asia/Shanghai`, `Asia/Beijing`, `Asia/Tokyo`, `Asia/Seoul`, `Asia/Singapore`, `Asia/Kolkata`, `Asia/Dubai`, `Asia/Hong_Kong`, `Asia/Taipei`, `America/Los_Angeles`, `America/New_York`, `America/Chicago`, `America/Denver`, `America/Sao_Paulo`, `Europe/London`, `Europe/Paris`, `Europe/Berlin`, `Europe/Moscow`, `Australia/Sydney`, `Pacific/Auckland`。
+
+### 夏令时边缘时区（单独识别）
+
+以下美国州内县区存在独立 DST 策略，已内置映射，避免 `zoneinfo` 解析异常：
+
+| 时区 | UTC offset | 说明 |
+|------|------------|------|
+| `America/Indiana/Marengo` | `-05:00` | 印第安纳州克劳福德县 |
+| `America/Indiana/Knox` | `-06:00` | 印第安纳州诺克斯县（使用中部时间）|
+| `America/Indiana/Petersburg` | `-05:00` | 印第安纳州派克县 |
+| `America/Indiana/Vevay` | `-05:00` | 印第安纳州瑞士县 |
+| `America/Indiana/Vincennes` | `-05:00` | 印第安纳州诺克斯县以东 |
+| `America/Indiana/Winamac` | `-05:00` | 印第安纳州普瓦斯基县 |
+| `America/Kentucky/Louisville` | `-05:00` | 肯塔基州路易斯维尔 |
+| `America/Kentucky/Monticello` | `-05:00` | 肯塔基州韦恩县 |
+| `America/North_Dakota/Beulah` | `-06:00` | 北达科他州 Mercer 县 |
+| `America/North_Dakota/Center` | `-06:00` | 北达科他州 Oliver 县 |
+| `America/North_Dakota/New_Salem` | `-06:00` | 北达科他州 Morton 县 |
 
 所有 CSV 时间戳格式：`YYYY-MM-DD ±HH:MM`，由 `--tz` 或配置决定。
 
@@ -72,10 +98,20 @@ python main.py --serve --port 8765 --tz Asia/Shanghai
 kpi_list:              # KPI 指标列表 (必填)
 analysis:              # 分析参数 (必填)
 dimensions:            # 维度定义 (必填)
+security:              # 安全配置 (可选，服务模式推荐)
 timezone_map:          # 自定义时区映射 (可选)
 output:                # 输出配置 (必填)
 recommended_defaults:  # 推荐参数档 (可选，运营参考)
+kpi_type_profiles:     # KPI 类型档位 (可选，运营参考)
 ```
+
+### security — 安全配置（服务模式推荐）
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `admin_token` | string | ❌ | 管理接口 Token。未设置时所有接口免鉴权（不推荐生产使用）|
+| `token_header` | string | ❌ | Token 所在请求头，默认 `X-Admin-Token` |
+| `allow_get_admin` | bool | ❌ | 是否允许 GET 调用 `/admin/reload`，默认 `false`（仅 POST）|
 
 ### kpi_list[] — KPI 指标定义
 
@@ -88,9 +124,12 @@ recommended_defaults:  # 推荐参数档 (可选，运营参考)
 | `expected_direction` | string | ✅ | 期望方向：`up`（越高越好）或 `down`（越低越好） |
 | `aggregation` | string | ✅ | 聚合方式：`sum` / `avg` / `count` |
 | `primary` | bool | ❌ | 是否默认分析（不传 `--kpi` 时分析 primary 指标） |
+| `kpi_type` | string | ❌ | KPI 类型：`monetary` / `order_volume` / `click_rate` / `retention` / `error_rate`，按类型套用档位 |
 | `seasonal_period` | int | ✅ | STL 季节性周期天数。周级=7，双周=14，月度=30 |
 | `normalization_threshold` | float | ✅ | 反向归一化惩罚系数（方向不匹配时乘此系数）。0~1，越小越严格 |
-| `sensitivity_profile` | string | ❌ | 灵敏度档位：`strict` / `standard` / `lenient`，覆盖以上两个数值 |
+| `sensitivity_profile` | string | ❌ | 灵敏度档位：`strict` / `standard` / `lenient`，覆盖类型档位与显式数值 |
+
+优先级（从低到高）：全局默认 → `kpi_type` → `sensitivity_profile` → 显式 `z_threshold` / `normalization_threshold`。
 
 ### analysis — 分析参数
 
@@ -99,8 +138,9 @@ recommended_defaults:  # 推荐参数档 (可选，运营参考)
 | `window_size` | int | ✅ | 当前分析窗口天数 |
 | `z_threshold` | float | ✅ | Z-Score 异常阈值（全局，可被 per-KPI 覆盖） |
 | `normalization_threshold` | float | ❌ | 全局反向归一化阈值（未设置 per-KPI 时使用） |
-| `drilldown_layers` | list[list[string]] | ✅ | 多层下钻维度组合，支持任意 3+ 层。例：`[[region, product_line, channel], [region, product_line, channel, member_level]]` |
+| `drilldown_layers` | list[list[string]] | ✅ | 多层下钻维度组合，支持任意 3+ 层。例：`[[region, product_line, channel], [region, product_line, channel, member_level], [region, product_line, channel, member_level, is_weekend]]` |
 | `priority_combos` | list[list[string]] | ✅ | 优先维度组合，匹配时排序加权 +0.08。例：`[[region, product_line]]` |
+| `max_combo_cardinality` | int | ❌ | 单层维度组合基数上限，超过即跳过以防组合爆炸。默认 200 |
 
 ### dimensions[] — 维度定义
 
@@ -142,7 +182,18 @@ recommended_defaults:
     lenient: 3.0       # 宽松：仅强信号
 ```
 
-运营可直接设置 `sensitivity_profile: "strict"` 而无需手填数值。
+### kpi_type_profiles — KPI 类型档位（运营参考）
+
+```yaml
+kpi_type_profiles:
+  monetary:      { z_threshold: 2.0, normalization_threshold: 0.30 }  # 营收、客单价、GMV
+  order_volume:  { z_threshold: 2.0, normalization_threshold: 0.25 }  # 订单量、UV、PV
+  click_rate:    { z_threshold: 1.8, normalization_threshold: 0.20 }  # CTR、CVR
+  retention:     { z_threshold: 2.0, normalization_threshold: 0.35 }  # DAU、次日留存
+  error_rate:    { z_threshold: 1.5, normalization_threshold: 0.15 }  # 支付失败率、流失率
+```
+
+运营可直接设置 `kpi_type: "click_rate"` 而无需手填数值。
 
 ---
 
@@ -180,13 +231,18 @@ dimensions:
     display_name: 渠道
     values: [线上直营, 线下门店]
 
+security:
+  admin_token: "change-me"
+  token_header: "X-Admin-Token"
+  allow_get_admin: false
+
 output:
   report_dir: output
   default_timezone: Asia/Shanghai
   csv_encoding: utf-8-sig
 ```
 
-### 范例 2: 多 KPI（周级 + 月度级混合周期）
+### 范例 2: 多 KPI（周级 + 月度级混合周期 + KPI 类型档位）
 
 ```yaml
 kpi_list:
@@ -196,20 +252,29 @@ kpi_list:
     expected_direction: up
     aggregation: sum
     primary: true
+    kpi_type: monetary        # ← 自动套用 z=2.0, norm=0.30
     seasonal_period: 7
-    normalization_threshold: 0.3
 
-  - name: churn_rate
-    display_name: 流失率
+  - name: order_count
+    display_name: 订单量
+    unit: 单
+    expected_direction: up
+    aggregation: sum
+    primary: false
+    kpi_type: order_volume    # ← 自动套用 z=2.0, norm=0.25
+    seasonal_period: 7
+
+  - name: click_through_rate
+    display_name: 点击率
     unit: "%"
-    expected_direction: down
+    expected_direction: up
     aggregation: avg
     primary: false
-    seasonal_period: 30
-    normalization_threshold: 0.2
+    kpi_type: click_rate      # ← 自动套用 z=1.8, norm=0.20
+    seasonal_period: 7
 ```
 
-### 范例 3: 4 层维度下钻（大零售业态）
+### 范例 3: 5 层维度下钻（大零售业态：产品 × 地域 × 渠道 × 会员等级 × 周末）
 
 ```yaml
 dimensions:
@@ -217,17 +282,22 @@ dimensions:
   - { name: product_line, display_name: 产品线, values: [手机, 电脑, 平板, 穿戴设备] }
   - { name: channel, display_name: 渠道, values: [线上直营, 线下门店, 分销商, 运营商] }
   - { name: member_level, display_name: 会员等级, values: [普通, 银卡, 金卡, 黑卡] }
+  - { name: is_weekend, display_name: 是否周末, values: [工作日, 周末] }
 
 analysis:
+  window_size: 7
+  z_threshold: 2.0
+  max_combo_cardinality: 200
   drilldown_layers:
     - [region, product_line, channel]
     - [region, product_line, channel, member_level]
+    - [region, product_line, channel, member_level, is_weekend]
   priority_combos:
     - [region, product_line]
     - [region, product_line, member_level]
 ```
 
-### 范例 4: 灵敏度档位配置
+### 范例 4: 灵敏度档位覆盖 KPI 类型
 
 ```yaml
 kpi_list:
@@ -237,31 +307,27 @@ kpi_list:
     expected_direction: up
     aggregation: avg
     primary: true
-    sensitivity_profile: strict   # ← 自动套用 z=1.5, norm=0.15
-
-  - name: brand_exposure
-    display_name: 品牌曝光量
-    unit: 次
-    expected_direction: up
-    aggregation: sum
-    primary: false
-    sensitivity_profile: lenient  # ← 自动套用 z=3.0, norm=0.50
+    kpi_type: error_rate            # z=1.5, norm=0.15
+    sensitivity_profile: strict     # 再叠加 strict：更严格 z=1.5, norm=0.15（此处一致）
 ```
 
-### 范例 5: 跨时区部署（日企 JST）
+### 范例 5: 跨时区部署（美东边缘县区）
 
 ```yaml
 timezone_map:
-  Asia/Tokyo: "+09:00"
-  JST: "+09:00"
+  America/Indiana/Marengo: "-05:00"
+  America/New_York: "-05:00"
+
+security:
+  admin_token: "prod-secret-token"
 
 output:
-  report_dir: output_jp
-  default_timezone: Asia/Tokyo
+  report_dir: output_us
+  default_timezone: America/Indiana/Marengo
   csv_encoding: utf-8-sig
 ```
 
-运行：`python main.py --tz Asia/Tokyo` 或 `python main.py --tz JST`
+运行：`python main.py --serve --tz America/Indiana/Marengo`
 
 ---
 
@@ -291,16 +357,22 @@ dimensions:
 
 **后果：** 该维度在分析时被静默跳过。**修正：** 对照数据库 schema 逐字核对。
 
-### 反例 3: drilldown_layers 维度名不在 dimensions 中
+### 反例 3: drilldown_layers 路径深度错配（父维度存在但子维度为空）
 
 ```yaml
-# ❌ 错误：drilldown_layers 用了 category，但 dimensions 只定义了 product_line
+# ❌ 错误：5 层下钻 [region, product_line, channel, member_level, is_weekend]，
+#        但数据库里 is_weekend 仅部分行有值，导致某路径下 member_level=黑卡 & is_weekend=周末
+#        组合基数超过 max_combo_cardinality 或返回全空
 analysis:
   drilldown_layers:
-    - [region, category, channel]   # ← category 未定义
+    - [region, product_line, channel, member_level, is_weekend]
+  max_combo_cardinality: 10  # ← 设置太低，5 层实际基数 5×4×4×4×2=640 > 10
 ```
 
-**后果：** 该层下钻返回空。**修正：** `drilldown_layers` 中的每个维度名必须在 `dimensions` 中存在且一致。
+**后果：** 该 5 层组合被直接跳过（WARN 日志），根因不完整。**修正：**
+- 5 层场景建议 `max_combo_cardinality ≥ 500`
+- 或拆成多个 3-4 层组合分步下钻，避免 5 层同时展开
+- 确认每个维度在所有路径上均有数据
 
 ### 反例 4: seasonal_period 设置过大数据不足
 
@@ -323,13 +395,13 @@ kpi_list:
     normalization_threshold: 1.5    # ← >1 方向不匹配惩罚反向变成激励
 ```
 
-**后果：** 根因排序完全颠倒，无关维度排在前面。**修正：** 取值范围 `(0, 1]`，建议用 `sensitivity_profile` 档位避免手填出错。
+**后果：** 根因排序完全颠倒，无关维度排在前面。**修正：** 取值范围 `(0, 1]`，优先用 `kpi_type` 或 `sensitivity_profile` 档位避免手填出错。
 
 ---
 
 ## 推荐默认值速查表
 
-运营初次配置时直接使用档位即可，无需手填数值：
+### 按灵敏度档位
 
 | 场景 | 档位 | seasonal_period | normalization_threshold | z_threshold |
 |------|------|-----------------|-------------------------|-------------|
@@ -338,6 +410,16 @@ kpi_list:
 | 品牌曝光/流量（高噪声） | `lenient` + weekly | 7 | 0.50 | 3.0 |
 | 月度财务指标 | `standard` + monthly | 30 | 0.30 | 2.0 |
 | 客单价/ARPU（变化慢） | `standard` + biweekly | 14 | 0.40 | 2.0 |
+
+### 按 KPI 类型
+
+| KPI 类型 | 代表指标 | z_threshold | normalization_threshold | 推荐 profile |
+|------|------|------|------|------|
+| `monetary` | 营收、客单价、GMV | 2.0 | 0.30 | standard |
+| `order_volume` | 订单量、UV、PV | 2.0 | 0.25 | standard |
+| `click_rate` | CTR、CVR | 1.8 | 0.20 | strict~standard |
+| `retention` | DAU、次日留存、7 日留存 | 2.0 | 0.35 | lenient |
+| `error_rate` | 支付失败率、流失率、退货率 | 1.5 | 0.15 | strict |
 
 ## 输出文件
 

@@ -6,6 +6,7 @@ kpi_list:
     expected_direction: up
     aggregation: sum
     primary: true
+    kpi_type: monetary
     seasonal_period: 7
     normalization_threshold: 0.3
 
@@ -16,8 +17,9 @@ kpi_list:
     expected_direction: up
     aggregation: sum
     primary: false
+    kpi_type: order_volume
     seasonal_period: 7
-    normalization_threshold: 0.3
+    normalization_threshold: 0.25
 
   - name: avg_price
     display_name: 客单价
@@ -26,8 +28,14 @@ kpi_list:
     expected_direction: up
     aggregation: avg
     primary: false
+    kpi_type: monetary
     seasonal_period: 30
     normalization_threshold: 0.4
+
+security:
+  admin_token: "kpi-explainer-admin-2026"
+  token_header: "X-Admin-Token"
+  allow_get_admin: false
 
 analysis:
   window_size: 7
@@ -36,9 +44,11 @@ analysis:
   drilldown_layers:
     - [region, product_line, channel]
     - [region, product_line, channel, member_level]
+    - [region, product_line, channel, member_level, is_weekend]
   priority_combos:
     - [region, product_line]
     - [region, product_line, member_level]
+  max_combo_cardinality: 200
 
 dimensions:
   - name: region
@@ -74,6 +84,12 @@ dimensions:
       - 金卡
       - 黑卡
 
+  - name: is_weekend
+    display_name: 是否周末
+    values:
+      - 工作日
+      - 周末
+
 timezone_map:
   CST: "+08:00"
   JST: "+09:00"
@@ -86,11 +102,36 @@ timezone_map:
   AEST: "+10:00"
   NST: "+12:00"
   Asia/Shanghai: "+08:00"
+  Asia/Beijing: "+08:00"
   Asia/Tokyo: "+09:00"
+  Asia/Seoul: "+09:00"
+  Asia/Singapore: "+08:00"
+  Asia/Kolkata: "+05:30"
+  Asia/Dubai: "+04:00"
+  Asia/Hong_Kong: "+08:00"
+  Asia/Taipei: "+08:00"
   America/Los_Angeles: "-08:00"
   America/New_York: "-05:00"
+  America/Chicago: "-06:00"
+  America/Denver: "-07:00"
+  America/Sao_Paulo: "-03:00"
   Europe/London: "+00:00"
   Europe/Paris: "+01:00"
+  Europe/Berlin: "+01:00"
+  Europe/Moscow: "+03:00"
+  Australia/Sydney: "+10:00"
+  Pacific/Auckland: "+12:00"
+  America/Indiana/Marengo: "-05:00"
+  America/Indiana/Knox: "-06:00"
+  America/Indiana/Petersburg: "-05:00"
+  America/Indiana/Vevay: "-05:00"
+  America/Indiana/Vincennes: "-05:00"
+  America/Indiana/Winamac: "-05:00"
+  America/Kentucky/Louisville: "-05:00"
+  America/Kentucky/Monticello: "-05:00"
+  America/North_Dakota/Beulah: "-06:00"
+  America/North_Dakota/Center: "-06:00"
+  America/North_Dakota/New_Salem: "-06:00"
 
 output:
   report_dir: output
@@ -110,3 +151,25 @@ recommended_defaults:
     strict: 1.5
     standard: 2.0
     lenient: 3.0
+
+kpi_type_profiles:
+  monetary:
+    description: 金额类指标（营收、客单价、GMV）
+    z_threshold: 2.0
+    normalization_threshold: 0.30
+  order_volume:
+    description: 订单量/流量类指标（订单量、UV、PV）
+    z_threshold: 2.0
+    normalization_threshold: 0.25
+  click_rate:
+    description: 点击率/转化率类指标（CTR、CVR）
+    z_threshold: 1.8
+    normalization_threshold: 0.20
+  retention:
+    description: 留存/活跃类指标（DAU、次日留存）
+    z_threshold: 2.0
+    normalization_threshold: 0.35
+  error_rate:
+    description: 错误率/流失率类指标（支付失败率、流失率）
+    z_threshold: 1.5
+    normalization_threshold: 0.15
