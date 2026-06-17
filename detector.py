@@ -11,6 +11,23 @@ class AnomalyDetector:
         self.z_threshold = z_threshold
         self.db_path = db_path
 
+    @classmethod
+    def from_config(cls, kpi_name, config, db_path=None):
+        analysis_cfg = config.get("analysis", {})
+        window_size = analysis_cfg.get("window_size", 7)
+        z_threshold = analysis_cfg.get("z_threshold", 2.0)
+
+        kpi_list = config.get("kpi_list", [])
+        kpi_cfg = next((k for k in kpi_list if k["name"] == kpi_name), {})
+        seasonal_period = kpi_cfg.get("seasonal_period", analysis_cfg.get("seasonal_period", 7))
+
+        return cls(
+            window_size=window_size,
+            seasonal_period=seasonal_period,
+            z_threshold=z_threshold,
+            db_path=db_path,
+        )
+
     def load_daily_kpi(self, kpi_name="revenue"):
         conn = get_connection(self.db_path)
         query = """
@@ -102,6 +119,7 @@ class AnomalyDetector:
 
         summary = {
             "kpi_name": kpi_name,
+            "seasonal_period": self.seasonal_period,
             "current_window_days": len(current),
             "current_mean": round(curr_mean, 2),
             "historical_mean": round(hist_mean, 2),

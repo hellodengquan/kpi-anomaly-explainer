@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -13,20 +14,13 @@ from reporter import ReportGenerator, load_config
 def run_analysis_for_kpi(kpi_name, config, db_path=None):
     analysis_cfg = config.get("analysis", {})
     window_size = analysis_cfg.get("window_size", 7)
-    seasonal_period = analysis_cfg.get("seasonal_period", 7)
-    z_threshold = analysis_cfg.get("z_threshold", 2.0)
 
     print(f"  [1/4] 异常检测 (STL)...")
-    detector = AnomalyDetector(
-        window_size=window_size,
-        seasonal_period=seasonal_period,
-        z_threshold=z_threshold,
-        db_path=db_path
-    )
+    detector = AnomalyDetector.from_config(kpi_name, config, db_path=db_path)
     current_df, historical_df, overall_summary = detector.get_current_window(kpi_name)
 
     print(f"  [2/4] 维度下钻分析...")
-    analyzer = DimensionAnalyzer(db_path=db_path, window_size=window_size)
+    analyzer = DimensionAnalyzer(db_path=db_path, window_size=window_size, config=config)
     single_dim_results, cross_df, three_dim_df = analyzer.deep_dive(kpi_name)
 
     for dim_name, result in single_dim_results.items():
@@ -35,7 +29,7 @@ def run_analysis_for_kpi(kpi_name, config, db_path=None):
             print(f"    {dim_name} 最大贡献: {top[dim_name]}, 贡献度={top['contribution']:.2f}%")
 
     print(f"  [3/4] 根因排序...")
-    ranker = RootCauseRanker(z_threshold=z_threshold)
+    ranker = RootCauseRanker.from_config(kpi_name, config)
     root_causes = ranker.generate_root_causes(
         single_dim_results, cross_df, overall_summary, three_dim_df
     )
@@ -58,7 +52,7 @@ def run_analysis_for_kpi(kpi_name, config, db_path=None):
     }
 
 
-def run(kpi_name=None, db_path=None, generate_multi_report=True):
+def run(kpi_name=None, db_path=None, generate_multi_report=True, tz_label=None):
     config = load_config()
 
     print("[1/5] 初始化数据库...")
@@ -85,7 +79,7 @@ def run(kpi_name=None, db_path=None, generate_multi_report=True):
         all_results[kpi_n] = result
 
     print("[5/5] 生成报告...")
-    reporter = ReportGenerator(config=config)
+    reporter = ReportGenerator(config=config, tz_label=tz_label)
 
     if generate_multi_report and len(all_results) > 1:
         md_path, all_csv_paths = reporter.generate_multi(all_results)
@@ -113,5 +107,21 @@ def run(kpi_name=None, db_path=None, generate_multi_report=True):
     return md_path, all_results
 
 
+def main():
+    parser = argparse.ArgumentParser(description="KPI 异常解释器")
+    parser.add_argument("--kpi", type=str, default=None, help="指定分析的 KPI 名称（默认分析所有 primary KPI）")
+    parser.add_argument("--tz", type=str, default=None, help="时区标签，如 CST/JST/PST/UTC 或 +08:00 格式")
+    parser.add_argument("--db", type=str, default=None, help="数据库文件路径")
+    parser.add_argument("--single", action="store_true", help="仅生成单指标报告（不生成多指标综合报告）")
+    args = parser.parse_args()
+
+    run(
+        kpi_name=args.kpi,
+        db_path=args.db,
+        generate_multi_report=not args.single,
+        tz_label=args.tz,
+    )
+
+
 if __name__ == "__main__":
-    run()
+    main()

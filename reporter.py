@@ -4,8 +4,20 @@ import pandas as pd
 from datetime import datetime
 
 
-DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kpi_config.yaml"
-)
+DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kpi_config.yaml")
+
+TIMEZONE_MAP_BUILTIN = {
+    "CST": "+08:00",
+    "JST": "+09:00",
+    "PST": "-08:00",
+    "EST": "-05:00",
+    "UTC": "+00:00",
+    "CET": "+01:00",
+    "IST": "+05:30",
+    "KST": "+09:00",
+    "AEST": "+10:00",
+    "NST": "+12:00",
+}
 
 
 def load_config(config_path=None):
@@ -15,14 +27,34 @@ def load_config(config_path=None):
     return config
 
 
+def resolve_timezone(tz_label, config=None):
+    if not tz_label:
+        cfg = config or {}
+        tz_label = cfg.get("output", {}).get("default_timezone", "CST")
+
+    if tz_label.startswith("+") or tz_label.startswith("-"):
+        return tz_label
+
+    if config:
+        custom_map = config.get("timezone_map", {})
+        if tz_label in custom_map:
+            return custom_map[tz_label]
+
+    if tz_label in TIMEZONE_MAP_BUILTIN:
+        return TIMEZONE_MAP_BUILTIN[tz_label]
+
+    return "+00:00"
+
+
 class ReportGenerator:
-    def __init__(self, output_dir=None, config=None, config_path=None):
+    def __init__(self, output_dir=None, config=None, config_path=None, tz_label=None):
         self.config = config or load_config(config_path)
         self.output_dir = output_dir or os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             self.config.get("output", {}).get("report_dir", "output")
         )
-        self.timezone_offset = self.config.get("output", {}).get("timezone_offset", "+08:00")
+        self.tz_label = tz_label or self.config.get("output", {}).get("default_timezone", "CST")
+        self.timezone_offset = resolve_timezone(self.tz_label, self.config)
         self.csv_encoding = self.config.get("output", {}).get("csv_encoding", "utf-8-sig")
         self.kpi_meta = {k["name"]: k for k in self.config.get("kpi_list", [])}
         os.makedirs(self.output_dir, exist_ok=True)
@@ -64,6 +96,7 @@ class ReportGenerator:
         lines.append("# KPI 异常分析报告（多指标）")
         lines.append("")
         lines.append(f"> 生成时间: {now_ts}")
+        lines.append(f"> 时区: {self.tz_label} ({self.timezone_offset})")
         lines.append("")
 
         lines.append("## 指标概览")
@@ -130,7 +163,8 @@ class ReportGenerator:
             lines.append(f"> 生成时间: {now_ts}")
             lines.append(f"> 分析指标: {kpi_name} ({display})")
             lines.append(f"> 指标单位: {unit}")
-            lines.append(f"> 分析窗口: {overall_summary.get('date_range', 'N/A')} ({self.timezone_offset})")
+            lines.append(f"> 分析窗口: {overall_summary.get('date_range', 'N/A')} ({self.tz_label} {self.timezone_offset})")
+            lines.append(f"> STL 周期: {overall_summary.get('seasonal_period', 'N/A')} 天")
             lines.append("")
 
         lines.append(f"## {section_offset + 1}. 异常概述")
@@ -184,7 +218,7 @@ class ReportGenerator:
             lines.append("")
 
         sub_num = section_offset + 4
-        lines.append(f"## {sub_num}. 交叉维度分析（产品+地域优先）")
+        lines.append(f"## {sub_num}. 交叉维度分析")
         lines.append("")
         if not cross_df.empty:
             lines.append("| 维度组合 | 窗口合计 | 偏差 | 偏差% | 贡献度% | Z-Score | 方向 | 优先 |")
@@ -203,7 +237,12 @@ class ReportGenerator:
 
         if three_dim_df is not None and not three_dim_df.empty:
             sub_num = section_offset + 5
-            lines.append(f"## {sub_num}. 三维度深度下钻（地域+产品+渠道）")
+            layer_names = set()
+            for _, r in three_dim_df.iterrows():
+                ld = r.get("layer_dims", [])
+                layer_names.add("+".join(ld))
+            layer_desc = "、".join(sorted(layer_names)) if layer_names else "产品+地域+渠道"
+            lines.append(f"## {sub_num}. 三维度深度下钻（{layer_desc}）")
             lines.append("")
             lines.append("| 维度组合 | 父组合 | 偏差 | 偏差% | 父内贡献% | Z-Score | 方向 |")
             lines.append("|------|------|------|------|------|------|------|")
@@ -215,7 +254,8 @@ class ReportGenerator:
                 )
             lines.append("")
 
-        sub_num = section_offset + 6 if (three_dim_df is not None and not three_dim_df.empty) else section_offset + 5
+        sub_num_offset = 5 if (three_dim_df is not None and not three_dim_df.empty) else 4
+        sub_num = section_offset + sub_num_offset + 1
         lines.append(f"## {sub_num}. 根因排序")
         lines.append("")
 
@@ -266,7 +306,7 @@ class ReportGenerator:
                 )
             lines.append("")
 
-        sub_num = section_offset + 7 if (three_dim_df is not None and not three_dim_df.empty) else section_offset + 6
+        sub_num += 1
         lines.append(f"## {sub_num}. 结论与建议")
         lines.append("")
         if overall_summary.get("is_anomalous"):
@@ -285,6 +325,12 @@ class ReportGenerator:
                 for c in cross_causes[:3]:
                     lines.append(f"- {c['dimension_combo']}: {c['direction']}偏差，贡献度 {abs(c['contribution_pct']):.2f}%，置信度 {c['confidence']:.4f}")
                 lines.append("")
+            if three_causes:
+                lines.append("**三维度嫌疑:**")
+                lines.append("")
+                for c in three_causes[:3]:
+                    lines.append(f"- {c['dimension_combo']} (父: {c['parent_combo']}): {c['direction']}偏差，父内贡献 {abs(c['contribution_in_parent_pct']):.2f}%，置信度 {c['confidence']:.4f}")
+                lines.append("")
             lines.append("**建议行动:**")
             lines.append("")
             lines.append("1. 优先排查贡献度最高且置信度最大的维度组合，确认是否存在业务侧变更或外部冲击。")
@@ -296,7 +342,7 @@ class ReportGenerator:
 
         lines.append("---")
         lines.append("")
-        lines.append(f"*本报告由 KPI 异常解释器自动生成，采用 STL 季节性分解算法 | 时间基准 {self.timezone_offset}*")
+        lines.append(f"*本报告由 KPI 异常解释器自动生成，采用 STL 季节性分解算法 | 时区 {self.tz_label} ({self.timezone_offset})*")
 
         return "\n".join(lines)
 

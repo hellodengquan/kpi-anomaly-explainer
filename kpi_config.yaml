@@ -6,6 +6,8 @@ kpi_list:
     expected_direction: up
     aggregation: sum
     primary: true
+    seasonal_period: 7
+    normalization_threshold: 0.3
 
   - name: order_count
     display_name: 订单量
@@ -14,6 +16,8 @@ kpi_list:
     expected_direction: up
     aggregation: sum
     primary: false
+    seasonal_period: 7
+    normalization_threshold: 0.25
 
   - name: avg_price
     display_name: 客单价
@@ -22,14 +26,16 @@ kpi_list:
     expected_direction: up
     aggregation: avg
     primary: false
+    seasonal_period: 30
+    normalization_threshold: 0.4
 
 analysis:
   window_size: 7
-  seasonal_period: 7
   z_threshold: 2.0
-  priority_dimension_combo:
-    - region
-    - product_line
+  drilldown_layers:
+    - [region, product_line, channel]
+  priority_combos:
+    - [region, product_line]
 
 dimensions:
   - name: region
@@ -57,7 +63,15 @@ dimensions:
       - 分销商
       - 运营商
 
+timezone_map:
+  CST: "+08:00"
+  JST: "+09:00"
+  PST: "-08:00"
+  EST: "-05:00"
+  UTC: "+00:00"
+  CET: "+01:00"
+
 output:
   report_dir: output
-  timezone_offset: "+08:00"
+  default_timezone: CST
   csv_encoding: utf-8-sig
